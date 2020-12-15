@@ -1,0 +1,153 @@
+#!groovy
+pipeline {
+    agent any
+    stages {
+        stage('Node Status') {
+            steps {
+                sh 'echo "Current Node status"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc get nodes" master1'
+                input("Verify all nodes are in ready state?.")
+            }
+        }
+        stage('Gluster health') {
+            steps {
+		sh 'echo "Before OCP upgrade Gluster Status"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "sh /usr/local/bin/ocp-scripts/gluster_status.sh" master1'
+                input("Proceed only if Gluster volume and bricks are healthy")
+            }
+        }
+        stage('Namespace,pod, pvc, pv service, routes output and file system health') {
+            steps {
+                sh 'echo "Before OCP patching collect all details in Cluster"'
+                input("Verify all the pods and file system are in ready state and below threshold?.")
+            }
+        }
+        stage('Validate all pods are in running state') {
+            steps {
+                sh 'echo "Before OCP patching"'
+                sh 'echo "Need to write a script currently pending " master1'
+                input("Verify all the pods and file system are in ready state and below threshold?.")
+            }
+        }
+        stage('Validate all certificates are not expired') {
+            steps {
+                sh 'echo "Before OCP patching validate certificate"'
+                sh 'ansible-playbook -i /etc/ansible/Test_Inventory_OCP_upgrade_Final.txt /usr/share/ansible/openshift-ansible/playbooks/openshift-checks/certificate_expiry/easy-mode.yaml'
+		sh 'echo "Read the output file of above playbook"'
+		sh 'cat /home/ocpadmin/cert-expiry-report*.json'
+		input("Validate all the certficates are not expired and have enough validity minimum 100 days")
+		sh 'rm -f /home/ocpadmin/cert-expiry-report*'
+            }
+        }
+        stage('Update ansible package in bastion host') {
+            steps {
+                sh 'sudo yum update openshift-ansible -y'
+                sh 'rpm -qa | grep -i ansible'
+                input("Verify anisble package version?")
+            }
+        }
+        stage('Backup etcd') {
+            steps {
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "sudo sh -x /usr/local/bin/ocp-scripts/etcd-backup.sh" master2'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "ls -altr /ocpbackup/etcd_backup/" master2'
+                input("Verified the above ETCD Backup output?")
+            }
+        }
+        stage('Backup all 3 Master configuration files') {
+            steps {
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "sudo sh -x /usr/local/bin/ocp-scripts/openshift-ansible-contrib/reference-architecture/day2ops/scripts/backup_master_node.sh" masternodes'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "ls -altr /ocpbackup/master_config_backup/" masternodes'
+                input("Verified the above Master configuration Backup output?")
+            }
+        }
+        stage('Master upgrade') {
+            steps {
+                sh 'echo "Master upgrade"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc version" masternodes'
+                input("Verify the above Master Upgrade completed?")
+            }
+        }
+        stage('After master upgrade Gluster health') {
+            steps {
+		sh 'echo "Before OCP upgrade Gluster Status"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "sh /usr/local/bin/ocp-scripts/gluster_status.sh" master1'
+                input("Proceed only if Gluster volume and bricks are healthy")
+            }
+        }
+        stage('Label infra node') {
+            steps {
+                sh 'echo "Labeling infra node"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc label node rs01ue2docpls04.ds.aholddelhaize.com type=upgrade" master1'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc label node rs01ue2docpls05.ds.aholddelhaize.com type=upgrade" master1'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc label node rs01ue2docpls06.ds.aholddelhaize.com type=upgrade" master1'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc label node rs01ue2docpls07.ds.aholddelhaize.com type=upgrade" master1'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc get node --show-labels" master1'             
+                input("Verify infra node has been labeled")
+            }
+        }
+        stage('Infra node upgrade') {
+            steps {
+                sh 'echo "Infra node upgrade"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc version" infranodes'
+                input("Verify above infra node has been upgraded")
+            }
+        }
+        stage('Un-labeling infra node') {
+            steps {
+                sh 'echo "Un-labeling infra node"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc label node rs01ue2docpls04.ds.aholddelhaize.com type-" master1'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc label node rs01ue2docpls05.ds.aholddelhaize.com type-" master1'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc label node rs01ue2docpls06.ds.aholddelhaize.com type-" master1'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc label node rs01ue2docpls07.ds.aholddelhaize.com type-" master1'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc get node --show-labels" master1'
+                input("Verify infra node has been Un-labeled")
+            }
+        }
+        stage('After Infra node upgrade Gluster health') {
+            steps {
+		sh 'echo "Before OCP upgrade Gluster Status"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "sh /usr/local/bin/ocp-scripts/gluster_status.sh" master1'
+                input("Proceed only if Gluster volume and bricks are healthy")
+            }
+        }
+        stage('Labeling App node') {
+            steps {
+                sh 'echo "Labeling App node"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc label node rs06ue2docpls01.ds.aholddelhaize.com type=upgrade" master1'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc label node rs06ue2docpls02 type=upgrade" master1'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc get node --show-labels" master1'
+                input("Verify App node has been labeled")
+            }
+        }
+        stage('Application node upgrade') {
+            steps {
+                sh 'echo "App node upgrade"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc version" appnodes'
+                input("Verify above Application node has been upgraded")
+            }
+        }
+        stage('Un-labeling App node') {
+            steps {
+                sh 'echo "Un-labeling App node"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc label node rs06ue2docpls01.ds.aholddelhaize.com type-" master1'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc label node rs06ue2docpls02 type-" master1'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc get node --show-labels" master1'
+                input("Verify App node has been Un-labeled")
+            }
+        }
+        stage('After app upgrade Gluster health') {
+            steps {
+		sh 'echo "Before OCP upgrade Gluster Status"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "sh /usr/local/bin/ocp-scripts/gluster_status.sh" master1'
+                input("Proceed only if Gluster volume and bricks are healthy")
+            }
+        }
+        stage('Cluster Openshift Version post upgrade') {
+            steps {
+		sh 'echo "Openshift version post upgrade"'
+                sh 'ansible -i /jenkins/jenkin_inv.txt -m command -a "oc version" nodes'
+                input("Verify all nodes in the cluster are updated to latest version")
+            }
+        }
+    }
+}
